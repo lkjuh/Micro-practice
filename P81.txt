@@ -1,0 +1,82 @@
+//I2c
+//Setup
+// PB0,1 -> LED0,1
+// PD2-7 -> LED2,7
+
+// Note: No external device, data out display by led, data in ignored
+
+#include <avr/io.h>
+#include <util/delay.h>
+
+void i2c_init(void) {
+    TWSR = 0x00; 
+    TWBR = 72;   
+    TWCR = (1 << TWEN); 
+}
+
+void i2c_start(void) {
+    TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN);
+    // while (!(TWCR & (1 << TWINT))); // Commented out for no-hardware test
+}
+
+void i2c_write(uint8_t data) {
+    // Map data bits 0 & 1 to PB0, PB1 (Pins 8 & 9)
+    PORTB = (PORTB & 0xFC) | (data & 0x03);
+
+    // Map data bits 2 through 7 to PORTD (Pins 2 to 7)
+    PORTD = (PORTD & 0x03) | (data & 0xFC);
+
+    TWDR = data;
+    TWCR = (1 << TWINT) | (1 << TWEN);
+    // while (!(TWCR & (1 << TWINT))); // Commented out, no external device
+}
+
+uint8_t i2c_read_ack(void) {
+    TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWEA);
+    return TWDR;
+}
+
+uint8_t i2c_read_nack(void) {
+    TWCR = (1 << TWINT) | (1 << TWEN);
+    return TWDR;
+}
+
+void i2c_stop(void) {
+    TWCR = (1 << TWINT) | (1 << TWSTO) | (1 << TWEN);
+}
+
+int main(void) {
+    // Set PB0 and PB1 as outputs (Pins 8 and 9)
+    DDRB |= 0b00000011;
+
+    // Set PD2 through PD7 as outputs (Pins 2 to 7)
+    DDRD |= 0b11111100; 
+
+    i2c_init();
+
+    // REAL I2C SENSOR DATA SEQUENCE (e.g., MPU6050 Registers & Commands)
+    uint8_t sample_data[] = {
+        0x75, // Register: WHO_AM_I (asks sensor for its ID code)
+        0x6B, // Register: PWR_MGMT_1 (Power Management configuration)
+        0x00, // Data: Wake up the sensor (write 0x00 to power management)
+        0x3B, // Register: ACCEL_XOUT_H (points to Accelerometer X-axis data)
+        0x1C, // Register: ACCEL_CONFIG (Accelerometer configuration)
+        0x08, // Data: Set scale range to +/- 4g
+        0x43, // Register: GYRO_XOUT_H (points to Gyroscope X-axis data)
+        0x1A  // Register: CONFIG (Digital Low Pass Filter settings)
+    };
+    
+    uint8_t total_patterns = sizeof(sample_data);
+    uint8_t current_index = 0;
+
+    while (1) {
+        i2c_start();
+        i2c_write((0x68 << 1) | 0);          // Sensor Address (0x68) + Write bit (0)
+        i2c_write(sample_data[current_index]); // Send the real register/command byte
+        i2c_stop();
+
+        // Move to the next real command byte every half second
+        current_index = (current_index + 1) % total_patterns;
+        _delay_ms(500); 
+    }
+}
