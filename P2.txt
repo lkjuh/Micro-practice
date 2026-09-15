@@ -1,0 +1,61 @@
+#include <Arduino.h>
+#include <avr/interrupt.h>
+
+volatile uint16_t adc_sum = 0;
+volatile uint8_t sample_count = 0;
+volatile bool adc_ready = false;
+
+void ADC_Init() {
+    // Set reference to AVCC (5V) and select ADC2 (PC2) via MUX1
+    ADMUX |= (1 << REFS0) | (1 << MUX1);
+    
+    // Enable ADC, Enable Interrupt, Set Prescaler to 128
+    ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+// ADC Interrupt: Runs automatically when a reading finishes
+ISR(ADC_vect) {
+    adc_sum += ADC; // Accumulate 10-bit values
+    sample_count++;
+    
+    if (sample_count >= 16) {
+        adc_ready = true;      // Flag main loop
+    } else {
+        ADCSRA |= (1 << ADSC); // Trigger next reading
+    }
+}
+
+void setup() {
+    Serial.begin(9600); // Initialize Terminal/Serial monitor
+    ADC_Init();         // Initialize hardware registers
+}
+
+void loop() {
+    // Start the first conversion of a 16-sample batch
+    if (!adc_ready && sample_count == 0) {
+        ADCSRA |= (1 << ADSC); 
+    }
+
+    // Process data once 16 samples are collected
+    if (adc_ready) {
+        // Calculate average
+        uint16_t avg_adc = adc_sum / 16;
+        
+        // Convert to voltage
+        float voltage = (avg_adc * 5.0) / 1024.0;
+        
+        // Print to PlatformIO Terminal
+        Serial.print("Raw ADC: ");
+        Serial.print(avg_adc);
+        Serial.print(" | Voltage: ");
+        Serial.print(voltage);
+        Serial.println(" V");
+        
+        // Reset variables for the next batch
+        adc_sum = 0;
+        sample_count = 0;
+        adc_ready = false;
+        
+        delay(500); // Pause before next reading
+    }
+}

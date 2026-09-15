@@ -1,0 +1,88 @@
+#include <Arduino.h>
+#include <LiquidCrystal.h>
+#include <avr/interrupt.h>
+
+// RUN in CPP
+// Khởi tạo LCD theo thứ tự chân: RS, EN, D4, D5, D6, D7
+// PB0 -> RS (LCD 1602A)
+// PB1 -> EN (LCD 1602A)
+// RW -> GND (LCD 1602A)
+// PC2 -> ADC IN
+// PD4-7 -> D4-7 (LCD 1602A)
+
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+
+// Các biến ngắt volatile
+volatile uint16_t adc_sum = 0;
+volatile uint8_t sample_count = 0;
+volatile bool adc_ready = false;
+
+void ADC_Init() {
+    // Đặt điện áp tham chiếu AVCC (5V) và chọn kênh ADC2 (Chân A2)
+    ADMUX = (1 << REFS0) | (1 << MUX1);
+    
+    // Enable ADC, Enable Interrupt, Prescaler = 128
+    ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+// Hàm phục vụ ngắt ADC (Chạy tự động khi xong 1 phép đo)
+ISR(ADC_vect) {
+    adc_sum += ADC;
+    sample_count++;
+    
+    if (sample_count >= 16) {
+        adc_ready = true; // Báo cho vòng lặp chính
+    } else {
+        ADCSRA |= (1 << ADSC); // Bắt đầu đọc mẫu tiếp theo
+    }
+}
+
+void setup() {
+    // Khởi tạo LCD 16x2
+    lcd.begin(16, 2);      
+    lcd.print("System Ready...");
+    delay(1000);
+    lcd.clear();
+    
+    // Khởi tạo thanh ghi ADC & Bật ngắt toàn cục
+    ADC_Init(); 
+    sei();
+}
+
+void loop() {
+    // Kích hoạt đợt lấy mẫu đầu tiên
+    if (!adc_ready && sample_count == 0) {
+        ADCSRA |= (1 << ADSC); 
+    }
+
+    // Xử lý dữ liệu khi đã gom đủ 16 mẫu
+    if (adc_ready) {
+        // Tắt ngắt tạm thời để đọc & reset biến an toàn
+        cli();
+        uint16_t current_sum = adc_sum;
+        adc_ready = false;
+        adc_sum = 0;
+        sample_count = 0;
+        sei(); // Bật lại ngắt
+
+        // Tính trung bình cộng của 16 mẫu
+        uint16_t avg_adc = current_sum / 16;
+        
+        // Quy đổi ra điện áp
+        float voltage = (avg_adc * 5.0) / 1024.0;
+        
+        // In giá trị ADC lên dòng 0 của LCD
+        lcd.setCursor(0, 0); 
+        lcd.print("Raw ADC: ");
+        lcd.print(avg_adc);
+        lcd.print("   "); // Khoảng trắng xóa ký tự thừa
+        
+        // In giá trị Điện áp lên dòng 1 của LCD
+        lcd.setCursor(0, 1); 
+        lcd.print("Voltage: ");
+        lcd.print(voltage, 2);
+        lcd.print("V  ");
+        
+        delay(500); // Tạm dừng 0.5s trước đợt đọc mới
+    }
+}

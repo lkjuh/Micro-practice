@@ -1,0 +1,207 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+//Set up
+//PD6 -> LED (PWM out)
+//PC0 -> ADC In
+
+// Định nghĩa tần số thạch anh (16 MHz đối với bo Arduino Uno).
+// LƯU Ý: Nếu dùng chip rời chạy dao động nội 8MHz, hãy đổi thành 8000000UL.
+#ifndef F_CPU
+#define F_CPU 16000000UL
+#endif
+
+#define BAUDRATE 9600
+#define UBRR_VALUE ((F_CPU / (16UL * BAUDRATE)) - 1)
+
+// Cờ báo ngắt từ Timer0: bật lên 1 mỗi khi đủ 1ms
+volatile uint8_t timer_flag = 0;
+
+// Biến lưu giá trị ADC đọc từ cảm biến (0 - 1023)
+volatile uint16_t adc_sensor_value = 0;
+
+// Khởi tạo Timer0 tạo nhịp đồng hồ ngắt chính xác 1 ms (1000 Hz)
+void Timer0_Init(void) {
+    // TCCR0A: Chọn chế độ CTC (Clear Timer on Compare Match) bằng cách set bit WGM01
+    TCCR0A = (1 << WGM01);
+    
+    // TCCR0B: Chọn hệ số chia tần (Prescaler) = 64 (Bit CS01 và CS00 = 1)
+    TCCR0B = (1 << CS01) | (1 << CS00);
+    
+    // Tính giá trị so sánh OCR0A để tạo chu kỳ ngắt 1ms:
+    // f_ngắt = F_CPU / (Prescaler * (OCR0A + 1))
+    // 1000Hz = 16.000.000 / (64 * (249 + 1))  --> OCR0A = 249
+    OCR0A = 249;
+    
+    // TIMSK0: Bật ngắt so sánh kênh A của Timer0 (Compare Match A Interrupt)
+    TIMSK0 = (1 << OCIE0A);
+}
+
+
+// Khởi tạo Timer0 ở chế độ Fast PWM phát xung ra chân PD6 (OC0A)
+void PWM_Init(void) {
+    // Đặt chân PD6 (OC0A / D6 trên Arduino) làm Output để xuất xung PWM điều khiển LED
+    DDRD |= (1 << DDD6);
+    
+    // TCCR0A: Chọn chế độ Fast PWM 8-bit (WGM00 = 1, WGM01 = 1)
+    TCCR0A |= (1 << WGM00) | (1 << WGM01);
+    
+    // TCCR0A: Chọn chế độ Non-Inverting PWM trên chân OC0A (COM0A1 = 1)
+    // Khi đếm từ 0 -> OCR0A chân xuất mức cao (HIGH), đạt OCR0A -> 255 chân hạ mức thấp (LOW)
+    TCCR0A |= (1 << COM0A1);
+}
+
+// Khởi tạo Bộ chuyển đổi Tương tự - Số (ADC)
+void ADC_Init(void) {
+    // ADMUX: Đặt điện áp tham chiếu AVcc (5V) bằng cách set bit REFS0.
+    // Mặc định chọn kênh ADC0 (chân PC0 / A0 trên Arduino).
+    ADMUX = (1 << REFS0);
+    
+    // ADCSRA: 
+    // - ADEN = 1: Bật bộ ADC
+    // - ADPS[2:0] = 111: Chọn Prescaler = 128 (Tần số lấy mẫu ADC = 16MHz / 128 = 125kHz, chuẩn 50-200kHz)
+    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+// Khởi tạo bộ giao tiếp nối tiếp UART
+void UART_Init(void) {
+    // Gán giá trị tốc độ Baud vào thanh ghi UBRR0 (chia thành 8-bit cao và 8-bit thấp)
+    UBRR0H = (uint8_t)(UBRR_VALUE >> 8);
+    UBRR0L = (uint8_t)(UBRR_VALUE);
+    
+    // UCSR0B: Bật chức năng truyền dữ liệu (TXEN0 = 1)
+    UCSR0B = (1 << TXEN0);
+    
+    // UCSR0C: Cấu hình định dạng khung truyền: 8 bit dữ liệu, 1 bit stop, không dùng parity
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+}
+
+
+// Gửi 1 ký tự ASCII qua UART
+void UART_Transmit(char data) {
+    // Chờ cho đến khi cờ UDRE0 = 1 (bộ đệm truyền UART rảnh)
+    while (!(UCSR0A & (1 << UDRE0)));
+    // Đưa dữ liệu cần gửi vào thanh ghi UDR0
+    UDR0 = data;
+}
+
+// Gửi một chuỗi ký tự qua UART
+void UART_SendString(const char* str) {
+    while (*str) {
+        UART_Transmit(*str++); // Gửi từng ký tự cho đến khi gặp ký tự kết thúc '\0'
+    }
+}
+
+// Chuyển đổi một số nguyên (0-65535) thành chuỗi và gửi qua UART
+void UART_SendNumber(uint16_t num) {
+    char buffer[6];
+    int i = 0;
+    if (num == 0) {
+        UART_Transmit('0');
+        return;
+    }
+    // Tách từng chữ số từ phải sang trái
+    while (num > 0) {
+        buffer[i++] = (num % 10) + '0';
+        num /= 10;
+    }
+    // Đảo ngược chuỗi và gửi ra UART
+    while (--i >= 0) {
+        UART_Transmit(buffer[i]);
+    }
+}
+
+/**
+ * @brief Đọc giá trị tương tự (Analog) từ kênh ADC chỉ định
+ * @param channel Kênh ADC cần đọc (0 - 7)
+ * @return Giá trị số 10-bit (0 - 1023)
+ */
+uint16_t ADC_Read(uint8_t channel) {
+    // Xóa 4 bit thấp của ADMUX và chọn kênh mới (0-7)
+    ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
+    
+    // ADCSRA: Set bit ADSC để bắt đầu quá trình chuyển đổi ADC
+    ADCSRA |= (1 << ADSC);
+    
+    // Vòng lặp chờ bit ADSC tụt xuống 0 (báo hiệu chuyển đổi hoàn tất)
+    while (ADCSRA & (1 << ADSC));
+    
+    // Trả về kết quả 10-bit từ thanh ghi ADC
+    return ADC;
+}
+
+// Trình xử lý ngắt Timer0 Compare Match A.
+ISR(TIMER0_COMPA_vect) {
+    timer_flag = 1; // Bật cờ báo hiệu đã trải qua 1ms
+}
+
+int main(void) {
+    // Khởi tạo các ngoại vi phần cứng
+    Timer0_Init();
+    PWM_Init();
+    ADC_Init();
+    UART_Init();
+
+    // Cho phép ngắt toàn cục (Enable Global Interrupts)
+    sei();
+
+    // Các biến đếm chu kỳ cho từng Task (đơn vị: ms)
+    uint16_t t_10ms = 0;
+    uint16_t t_20ms = 0;
+    uint16_t t_100ms = 0;
+    uint16_t t_1000ms = 0;
+
+    while (1) {
+        // Kiểm tra xem cờ ngắt 1ms đã được bật chưa
+        if (timer_flag) {
+            timer_flag = 0; // Xóa cờ ngắt để chờ lần ngắt tiếp theo
+
+            // Tăng biến đếm thời gian của các Task
+            t_10ms++;
+            t_20ms++;
+            t_100ms++;
+            t_1000ms++;
+
+            if (t_10ms >= 10) {
+                t_10ms = 0; // Reset bộ đếm 10ms
+                // Dùng cho các thuật toán xử lý dữ liệu nhanh (nếu có)
+            }
+
+            if (t_20ms >= 20) {
+                t_20ms = 0; // Reset bộ đếm 20ms
+
+                // 1. Giới hạn giá trị ADC trong dải hoạt động thực tế [200, 555]
+                uint16_t temp_adc = adc_sensor_value;
+                if (temp_adc < 300) temp_adc = 300;
+                if (temp_adc > 555) temp_adc = 555;
+
+                // 2. Ánh xạ (Map) dải ADC [300 - 555] về dải PWM 8-bit [0 - 255]
+                // Công thức: PWM = (ADC - MIN) * 255 / (MAX - MIN)
+                uint8_t pwm_out = (uint32_t)(temp_adc - 300) * 255 / (555 - 300);
+
+                // 3. Gán giá trị PWM vào thanh ghi OCR0A để xuất chu kỳ xung ra PD6
+                OCR0A = pwm_out; 
+            }
+
+            if (t_100ms >= 100) {
+                t_100ms = 0; // Reset bộ đếm 100ms
+                
+                // Đọc điện áp cảm biến nối tại kênh ADC0 (Chân PC0)
+                adc_sensor_value = ADC_Read(0);
+            }
+
+            if (t_1000ms >= 1000) {
+                t_1000ms = 0; // Reset bộ đếm 1000ms
+                
+                // Gửi thông số ADC và giá trị Duty Cycle PWM lên máy tính
+                UART_SendString("Gia tri ADC Cam Bien: ");
+                UART_SendNumber(adc_sensor_value);
+                UART_SendString(" | Duty Cycle PWM: ");
+                UART_SendNumber(OCR0A);
+                UART_SendString("\r\n");
+            }
+        }
+    }
+
+    return 0;
+}

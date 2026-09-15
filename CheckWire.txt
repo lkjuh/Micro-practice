@@ -1,0 +1,15 @@
+#include <Arduino.h>
+
+#define TEST_PIN 2 // Chân duy nhất phát tín hiệu
+
+void setup() {
+    pinMode(TEST_PIN, OUTPUT);
+}
+
+void loop() {
+    // Phát xung chớp tắt liên tục 2Hz (0.25s sáng, 0.25s tắt)
+    digitalWrite(TEST_PIN, HIGH);
+    delay(250);
+    digitalWrite(TEST_PIN, LOW);
+    delay(250);
+}

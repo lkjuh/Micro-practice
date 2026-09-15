@@ -1,0 +1,176 @@
+#ifndef F_CPU
+#define F_CPU 16000000UL // Khai báo tần số thạch anh 16 MHz
+#endif
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdio.h>
+
+// Setup
+// PD2 -> RS (LCD 1602A)
+// PD3 -> EN (LCD 1602A)
+// PD4-7 -> D4-7 (LCD 1602A)
+// PB1 -> Servo (PWM)
+// PB3 -> LED (PWM)
+// RW -> GND (LCD 1062A)
+
+// --- CẤU HÌNH CHÂN KẾT NỐI PHẦN CỨNG ---
+#define RS PD2 // Chân RS của LCD 1602
+#define EN PD3 // Chân EN của LCD 1602
+// Các chân dữ liệu LCD D4-D7 nối vào PD4-PD7
+
+#define SERVO_PIN PB1 // Chân điều khiển Servo (Chân D9 / Timer1 OC1A)
+#define LED_PIN   PB3 // Chân điều khiển PWM LED (Chân D11 / Timer2 OC2A)
+
+// ============================================================================
+// 1. CHƯƠNG TRÌNH ĐIỀU KHIỂN LCD 1602A (CHẾ ĐỘ 4-BIT)
+// ============================================================================
+
+// Tạo xung Kích (Enable Pulse) để LCD chốt dữ liệu
+void lcd_pulse_enable(void) {
+    PORTD |= (1 << EN);
+    _delay_us(10);
+    PORTD &= ~(1 << EN);
+    _delay_us(100);
+}
+
+// Xuất 4 bit dữ liệu ra các chân PD4-PD7
+void lcd_write_4bits(uint8_t nibble) {
+    PORTD = (PORTD & 0x0F) | (nibble & 0xF0); // Giữ nguyên PD0-PD3, ghi 4 bit cao vào PD4-PD7
+    lcd_pulse_enable();
+}
+
+// Gửi Lệnh (is_data = 0) hoặc Dữ liệu/Ký tự (is_data = 1) ra LCD
+void lcd_send(uint8_t val, uint8_t is_data) {
+    if (is_data) PORTD |= (1 << RS);
+    else         PORTD &= ~(1 << RS);
+
+    lcd_write_4bits(val & 0xF0);        // Gửi 4 bit cao trước
+    lcd_write_4bits((val << 4) & 0xF0); // Gửi 4 bit thấp sau
+}
+
+void lcd_cmd(uint8_t cmd)   { lcd_send(cmd, 0); } // Hàm gửi Lệnh
+void lcd_data(uint8_t data) { lcd_send(data, 1); } // Hàm gửi Dữ liệu
+
+// Khởi tạo LCD theo chuẩn HD44780
+void lcd_init(void) {
+    DDRD |= 0xFC; // Set PD2 -> PD7 làm Output cho LCD
+    PORTD &= ~0xFC;
+    _delay_ms(100);
+
+    // Chuỗi reset cứng bắt buộc khi mới cấp nguồn
+    PORTD &= ~(1 << RS);
+    lcd_write_4bits(0x30); _delay_ms(10);
+    lcd_write_4bits(0x30); _delay_ms(2);
+    lcd_write_4bits(0x30); _delay_ms(2);
+    lcd_write_4bits(0x20); _delay_ms(2); // Chuyển sang giao tiếp 4-bit
+
+    lcd_cmd(0x28); _delay_ms(2);  // Chế độ 4-bit, 2 dòng, font 5x8
+    lcd_cmd(0x0C); _delay_ms(2);  // Bật hiển thị, tắt con trỏ
+    lcd_cmd(0x01); _delay_ms(10); // Xóa màn hình
+    lcd_cmd(0x06); _delay_ms(2);  // Tự động tăng vị trí con trỏ
+}
+
+// Đặt vị trí con trỏ LCD (col: cột 0-15, row: dòng 0-1)
+void lcd_set_cursor(uint8_t col, uint8_t row) {
+    uint8_t offsets[] = {0x00, 0x40};
+    lcd_cmd(0x80 | (col + offsets[row]));
+}
+
+// In một chuỗi ký tự ra màn hình LCD
+void lcd_print(const char *str) {
+    while (*str) lcd_data((uint8_t)*str++);
+}
+
+// ============================================================================
+// 2. CẤU HÌNH PWM TIMER1 NẠP XUNG 50Hz CHO SERVO (CHÂN PB1)
+// ============================================================================
+
+void Servo_PWM_Init(void) {
+    DDRB |= (1 << SERVO_PIN); // Set PB1 làm Output
+    TCCR1A = (1 << COM1A1) | (1 << WGM11);
+    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Fast PWM Mode 14, Prescaler = 8
+    ICR1 = 39999; // Tạo chu kỳ xung 20ms (Tần số 50Hz cho Servo)
+}
+
+// Đặt góc quay Servo (0 - 180 độ)
+void Servo_SetAngle(uint8_t angle) {
+    if (angle > 180) angle = 180;
+    uint16_t min_ocr = 999;  // Xung 0.5ms (Góc 0 deg)
+    uint16_t max_ocr = 4999; // Xung 2.5ms (Góc 180 deg)
+    // Quy đổi góc sang độ rộng xung điều khiển OCR1A
+    OCR1A = min_ocr + ((uint32_t)angle * (max_ocr - min_ocr)) / 180;
+}
+
+// ============================================================================
+// 3. CẤU HÌNH PWM TIMER2 ĐIỀU KHIỂN ĐỘ SÁNG LED (CHÂN PB3)
+// ============================================================================
+
+void LED_PWM_Init(void) {
+    DDRB |= (1 << LED_PIN); // Set PB3 làm Output
+
+    // Fast PWM 8-bit trên kênh OC2A (PB3), Prescaler = 64
+    TCCR2A = (1 << WGM20) | (1 << WGM21) | (1 << COM2A1);
+    TCCR2B = (1 << CS22);
+}
+
+// Tăng/giảm độ sáng LED tỉ lệ theo góc Servo (0 -> 180 deg)
+void LED_SetBrightnessByAngle(uint8_t angle) {
+    if (angle > 180) angle = 180;
+    
+    // Quy đổi dải Góc [0 - 180] sang dải PWM 8-bit [0 - 255]
+    uint8_t pwm_val = (uint16_t)angle * 255 / 180;
+    
+    // Gán giá trị PWM vào thanh ghi OCR2A để chỉnh độ sáng LED
+    OCR2A = pwm_val;
+}
+
+// ============================================================================
+// 4. CHƯƠNG TRÌNH CHÍNH
+// ============================================================================
+
+int main(void) {
+    // Khởi tạo các ngoại vi
+    lcd_init();
+    Servo_PWM_Init();
+    LED_PWM_Init();
+
+    // Hiển thị tiêu đề ở dòng 1
+    lcd_set_cursor(0, 0);
+    lcd_print("SERVO & LED CTRL");
+
+    char buffer[16];
+
+    while (1) {
+        // Quét Servo & tăng dần độ sáng LED từ 0 đến 180 độ
+        for (uint8_t angle = 0; angle <= 180; angle += 5) {
+            Servo_SetAngle(angle);            // Quay Servo
+            LED_SetBrightnessByAngle(angle);  // Cập nhật độ sáng LED
+
+            // Hiển thị Góc và giá trị PWM hiện tại lên dòng 2 LCD
+            lcd_set_cursor(0, 1);
+            sprintf(buffer, "Goc:%3d |PWM:%3d", angle, OCR2A);
+            lcd_print(buffer);
+
+            _delay_ms(50);
+        }
+
+        _delay_ms(500); // Tạm dừng khi đạt 180 độ
+
+        // Quét Servo & giảm dần độ sáng LED từ 180 về 0 độ
+        for (int16_t angle = 180; angle >= 0; angle -= 5) {
+            Servo_SetAngle((uint8_t)angle);
+            LED_SetBrightnessByAngle((uint8_t)angle);
+
+            lcd_set_cursor(0, 1);
+            sprintf(buffer, "Goc:%3d |PWM:%3d", (uint8_t)angle, OCR2A);
+            lcd_print(buffer);
+
+            _delay_ms(50);
+        }
+
+        _delay_ms(500); // Tạm dừng khi về 0 độ
+    }
+
+    return 0;
+}

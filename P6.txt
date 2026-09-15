@@ -1,0 +1,78 @@
+#include <Arduino.h>
+
+//Setup
+// PD2 -> EN (Motor)
+// PD3 -> Pul (Motor)
+// PD4 -> Dir (Motor)
+
+// M012: 1 0 0 !ko đc để 0 0 0
+
+// Định nghĩa chân kết nối với Module DRV8825
+#define EN_PIN   2  // Chân Enable
+#define DIR_PIN  3  // Chân Direction
+#define PUL_PIN  4  // Chân Pulse (Step)
+
+// Cấu hình vi bước M0-M2 (1-0-0 = Half Step): 400 xung cho 360 độ
+const float STEPS_PER_DEGREE = 400.0 / 360.0; 
+
+// Mảng chứa các góc cần quay (từ 0 đến 360 độ)
+const uint16_t target_angles[] = {0, 45, 90, 135, 180, 225, 270, 315, 360};
+
+// Tính số lượng phần tử trong mảng góc
+const uint8_t TOTAL_ANGLES = sizeof(target_angles) / sizeof(target_angles[0]);
+
+// Biến lưu góc hiện tại của động cơ
+uint16_t current_angle = 0;
+
+// Hàm điều khiển động cơ quay chính xác số bước
+void stepMotor(uint16_t steps, bool direction) {
+    digitalWrite(DIR_PIN, direction ? HIGH : LOW);
+
+    for (uint16_t i = 0; i < steps; i++) {
+        digitalWrite(PUL_PIN, HIGH);
+        delayMicroseconds(1000); // Tốc độ xung 1ms
+        digitalWrite(PUL_PIN, LOW);
+        delayMicroseconds(1000);
+    }
+}
+
+// Hàm di chuyển động cơ đến góc mục tiêu
+void moveToAngle(uint16_t target_angle) {
+    int16_t angle_diff = target_angle - current_angle;
+
+    // Nếu góc không thay đổi thì bỏ qua
+    if (angle_diff == 0) return;
+
+    // Xác định chiều quay và khoảng cách góc tuyệt đối
+    bool direction = (angle_diff > 0);
+    uint16_t abs_angle_diff = abs(angle_diff);
+
+    // Quy đổi từ góc sang số xung (bước) tương ứng
+    uint16_t steps_to_move = round(abs_angle_diff * STEPS_PER_DEGREE);
+
+    // Thực hiện quay động cơ
+    stepMotor(steps_to_move, direction);
+
+    // Cập nhật vị trí góc hiện tại
+    current_angle = target_angle;
+}
+
+void setup() {
+    pinMode(EN_PIN, OUTPUT);
+    pinMode(DIR_PIN, OUTPUT);
+    pinMode(PUL_PIN, OUTPUT);
+
+    // Bật Driver DRV8825
+    digitalWrite(EN_PIN, LOW);
+}
+
+void loop() {
+    // Duyệt lần lượt từng góc trong mảng
+    for (uint8_t i = 0; i < TOTAL_ANGLES; i++) {
+        moveToAngle(target_angles[i]); // Quay tới góc mục tiêu
+        delay(1000);                    // Tạm dừng 1 giây tại mỗi góc
+    }
+
+    // Sau khi quay hết mảng đến 360 độ, đưa vị trí về lại 0 độ để lặp lại chu kỳ mới
+    current_angle = 0; 
+}

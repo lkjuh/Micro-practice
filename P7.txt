@@ -1,0 +1,123 @@
+#include <Arduino.h>
+
+#ifndef F_CPU
+#define F_CPU 16000000UL // Định nghĩa thạch anh 16MHz
+#endif
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include <stdlib.h>
+
+//Setup
+PD8 -> Input
+
+// ============================================================================
+// 1. USART DRIVER (Giao tiếp Serial qua thanh ghi cứng)
+// ============================================================================
+void USART_Init(unsigned int baud) {
+    unsigned int ubrr = F_CPU / 16 / baud - 1;
+    UBRR0H = (unsigned char)(ubrr >> 8);
+    UBRR0L = (unsigned char)ubrr;
+    UCSR0B = (1 << TXEN0); // Bật truyền dữ liệu TX0
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // Khung truyền 8N1
+}
+
+void USART_Transmit(char data) {
+    while (!(UCSR0A & (1 << UDRE0))); // Chờ thanh ghi đệm trống
+    UDR0 = data;                       // Ghi dữ liệu ra USART
+}
+
+void USART_SendString(const char* str) {
+    while (*str) USART_Transmit(*str++);
+}
+
+void USART_SendNum(uint32_t num) {
+    char buffer[11];
+    ultoa(num, buffer, 10); // Quy đổi số sang chuỗi
+    USART_SendString(buffer);
+}
+
+// ============================================================================
+// 2. INPUT CAPTURE UNIT (ICP1 - Timer1 trên chân D8/PB0)
+// ============================================================================
+volatile uint16_t t_rising = 0;          // Thời điểm xuất hiện sườn lên
+volatile uint16_t t_falling = 0;         // Thời điểm xuất hiện sườn xuống
+volatile uint16_t pulse_width_ticks = 0; // Độ rộng xung (số tick)
+volatile uint16_t period_ticks = 0;      // Chu kỳ xung (số tick)
+volatile uint16_t t_last_rising = 0;     // Mốc sườn lên lần trước
+
+volatile bool capture_complete = false;  // Cờ báo đo xong 1 chu kỳ
+volatile uint8_t edge_state = 0;         // 0: Chờ sườn lên, 1: Chờ sườn xuống
+
+void Timer1_ICP1_Init() {
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1 = 0;
+
+    // Prescaler = 8 -> 1 tick = 0.5 us (với thạch anh 16MHz)
+    // ICNC1 = 1: Bật bộ lọc nhiễu | ICES1 = 1: Bắt sườn lên ban đầu
+    TCCR1B = (1 << ICNC1) | (1 << ICES1) | (1 << CS11);
+
+    TIFR1 |= (1 << ICF1);   // Xóa cờ ngắt tồn đọng
+    TIMSK1 |= (1 << ICIE1); // Bật ngắt Input Capture
+}
+
+// Trình phục vụ ngắt Input Capture của Timer1
+ISR(TIMER1_CAPT_vect) {
+    uint16_t current_icr = ICR1; // Đọc giá trị bộ đếm hardware tại thời điểm kích hoạt
+
+    if (edge_state == 0) {
+        // --- Bắt được Sườn Lên ---
+        t_rising = current_icr;
+        if (t_last_rising != 0) {
+            period_ticks = t_rising - t_last_rising; // Tính chu kỳ
+        }
+        t_last_rising = t_rising;
+
+        TCCR1B &= ~(1 << ICES1); // Đổi cấu hình sang bắt Sườn Xuống
+        edge_state = 1;
+    } else {
+        // --- Bắt được Sườn Xuống ---
+        t_falling = current_icr;
+        pulse_width_ticks = t_falling - t_rising; // Tính độ rộng xung mức HIGH
+
+        TCCR1B |= (1 << ICES1);  // Đổi cấu hình lại sang bắt Sườn Lên
+        edge_state = 0;
+        capture_complete = true; // Đánh dấu hoàn thành
+    }
+}
+
+void setup() {
+    DDRB &= ~(1 << DDB0); // Chân PB0 (ICP1 / D8) làm Input
+
+    USART_Init(9600);     // Khởi tạo USART với baudrate 9600
+    Timer1_ICP1_Init();   // Khởi tạo khối Input Capture
+    sei();                // Bật ngắt toàn cục
+
+    USART_SendString("\r\n=== PRACTICE 7: TIMER1 ICP1 ===\r\n");
+}
+
+void loop() {
+    if (capture_complete) {
+        // Đọc giá trị an toàn khỏi ngắt
+        cli();
+        uint32_t width_ticks = pulse_width_ticks;
+        uint32_t period_t = period_ticks;
+        capture_complete = false;
+        sei();
+
+        // Quy đổi từ ticks sang us (với Prescaler 8: 1 tick = 0.5 us)
+        uint32_t high_time_us = width_ticks / 2;
+        uint32_t period_us = period_t / 2;
+
+        // In kết quả trực tiếp qua USART
+        USART_SendString("Do rong xung (HIGH): ");
+        USART_SendNum(high_time_us);
+        USART_SendString(" us | Chu ky: ");
+        USART_SendNum(period_us);
+        USART_SendString(" us\r\n");
+
+        _delay_ms(500); // Tạm dừng 0.5s giữa các lần cập nhật
+    }
+}
