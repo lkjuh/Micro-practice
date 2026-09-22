@@ -1,0 +1,33 @@
+#include <Arduino.h>
+#include <EEPROM.h>
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) {
+    ; // Chờ kết nối Serial (dành cho một số bo mạch như Leonardo/Micro)
+  }
+
+  Serial.println("==========================================");
+  Serial.println("DANG XOA TOAN BO BO NHO EEPROM...");
+
+  // EEPROM.length() sẽ trả về kích thước tối đa của EEPROM (1024 bytes trên Uno/Nano)
+  for (unsigned int i = 0; i < EEPROM.length(); i++) {
+    EEPROM.write(i, 255); // Trạng thái xuất xưởng mặc định của EEPROM là 255 (0xFF)
+    
+    // In tiến độ ra Serial Monitor sau mỗi 100 bytes
+    if (i % 100 == 0) {
+      Serial.print("Da xoa: ");
+      Serial.print(i);
+      Serial.println(" bytes...");
+    }
+  }
+
+  Serial.println("==========================================");
+  Serial.println("HOAN THANH! DAH XOA SACH EEPROM.");
+  Serial.println("Bay gio ban co the nap lai code chinh.");
+  Serial.println("==========================================");
+}
+
+void loop() {
+  // Không làm gì thêm trong hàm loop
+}
