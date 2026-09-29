@@ -1,0 +1,81 @@
+#include <Arduino.h>
+#include <Servo.h>
+
+Servo servo;
+
+const int SERVO_PIN = 9;
+const int MIN_ANGLE = 0;
+const int MAX_ANGLE = 180;
+
+String inputBuffer = "";
+
+void setup()
+{
+    Serial.begin(9600);
+
+    servo.attach(SERVO_PIN);
+    servo.write(90);
+
+    Serial.println("Servo control ready.");
+    Serial.println("Enter angle (0-180):");
+}
+
+void processCommand(String command)
+{
+    command.trim();
+
+    if (command.length() == 0)
+        return;
+
+    bool validNumber = true;
+
+    for (unsigned int i = 0; i < command.length(); i++)
+    {
+        if (!isDigit(command[i]) && !(i == 0 && command[i] == '-'))
+        {
+            validNumber = false;
+            break;
+        }
+    }
+
+    if (!validNumber)
+    {
+        Serial.print("\nERROR: Invalid command.");
+        return;
+    }
+
+    int angle = command.toInt();
+
+    if (angle < MIN_ANGLE || angle > MAX_ANGLE)
+    {
+        Serial.print("\nERROR: Angle must be between 0 and 180 degrees.\n");
+        return;
+    }
+
+    servo.write(angle);
+
+    Serial.print("\nOK: Servo moved to ");
+    Serial.print(angle);
+    Serial.println(" degrees.");
+}
+
+void loop()
+{
+    while (Serial.available() > 0)
+    {
+        char receivedChar = Serial.read();
+
+        if (receivedChar == '\n' || receivedChar == '\r')
+        {
+            if (inputBuffer.length() > 0)
+            {
+                processCommand(inputBuffer);
+                inputBuffer = "";
+            }
+        }
+        else
+        {
+            inputBuffer += receivedChar;
+        }
+    }
+}

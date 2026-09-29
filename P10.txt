@@ -1,0 +1,41 @@
+#include <Arduino.h>
+
+const int PIR_PIN = 2;
+const int LED_PIN = 13;
+
+int lastState = LOW;
+
+void setup()
+{
+    pinMode(PIR_PIN, INPUT);
+    pinMode(LED_PIN, OUTPUT);
+
+    Serial.begin(9600);
+
+    Serial.println("PIR sensor ready.");
+}
+
+void loop()
+{
+    int currentState = digitalRead(PIR_PIN);
+
+    // Only process when the PIR state changes
+    // !PIR = active low
+    if (currentState != lastState)
+    {
+        if (currentState == LOW)
+        {
+            digitalWrite(LED_PIN, HIGH);
+
+            Serial.println("Motion detected.");
+        }
+        else
+        {
+            digitalWrite(LED_PIN, LOW);
+
+            Serial.println("No motion.");
+        }
+
+        lastState = currentState;
+    }
+}
