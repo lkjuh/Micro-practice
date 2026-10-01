@@ -1,61 +1,115 @@
 #include <Arduino.h>
 #include <avr/interrupt.h>
+#include <LiquidCrystal.h>
 
+/// Wiring
+// Sensor output -> A2
+// LCD RS -> 12
+// LCD EN -> 11
+// LCD D4 -> 4
+// LCD D5 -> 5
+// LCD D6 -> 6
+// LCD D7 -> 7
+
+LiquidCrystal lcd(12, 11, 4, 5, 6, 7);
+
+/// ADC data
 volatile uint16_t adc_sum = 0;
 volatile uint8_t sample_count = 0;
 volatile bool adc_ready = false;
 
-void ADC_Init() {
-    // Set reference to AVCC (5V) and select ADC2 (PC2) via MUX1
-    ADMUX |= (1 << REFS0) | (1 << MUX1);
-    
-    // Enable ADC, Enable Interrupt, Set Prescaler to 128
-    ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+// ADC Initialization
+void ADC_Init()
+{
+    // AVCC reference, ADC2 input
+    ADMUX = (1 << REFS0) | (1 << MUX1);
+
+    // Enable ADC
+    // Enable ADC interrupt
+    // Prescaler = 128
+    ADCSRA = (1 << ADEN) | (1 << ADIE)
+           | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
 }
 
-// ADC Interrupt: Runs automatically when a reading finishes
-ISR(ADC_vect) {
-    adc_sum += ADC; // Accumulate 10-bit values
+// ADC Polling
+uint16_t ADC_Read_Polling()
+{
+    // Start conversion
+    ADCSRA |= (1 << ADSC);
+
+    // Wait until conversion is complete
+    while (ADCSRA & (1 << ADSC));
+
+    return ADC;
+}
+
+// ADC Interrupt
+ISR(ADC_vect)
+{
+    // Add current 10-bit ADC result
+    adc_sum += ADC;
     sample_count++;
-    
-    if (sample_count >= 16) {
-        adc_ready = true;      // Flag main loop
-    } else {
-        ADCSRA |= (1 << ADSC); // Trigger next reading
+
+    if (sample_count >= 16)
+    {
+        adc_ready = true;
+    }
+    else
+    {
+        // Start next conversion
+        ADCSRA |= (1 << ADSC);
     }
 }
 
-void setup() {
-    Serial.begin(9600); // Initialize Terminal/Serial monitor
-    ADC_Init();         // Initialize hardware registers
+// Setup
+void setup()
+{
+    lcd.begin(16, 2);
+    lcd.clear();
+
+    lcd.setCursor(0, 0);
+    lcd.print("ADC Sensor");
+
+    ADC_Init();
+
+    // Enable global interrupts
+    sei();
+
+    // Start first conversion
+    ADCSRA |= (1 << ADSC);
 }
 
-void loop() {
-    // Start the first conversion of a 16-sample batch
-    if (!adc_ready && sample_count == 0) {
-        ADCSRA |= (1 << ADSC); 
-    }
-
-    // Process data once 16 samples are collected
-    if (adc_ready) {
-        // Calculate average
+// Main Loop
+void loop()
+{
+    if (adc_ready)
+    {
+        // Calculate average of 16 samples
         uint16_t avg_adc = adc_sum / 16;
-        
-        // Convert to voltage
+
+        // Convert ADC value to voltage
         float voltage = (avg_adc * 5.0) / 1024.0;
-        
-        // Print to PlatformIO Terminal
-        Serial.print("Raw ADC: ");
-        Serial.print(avg_adc);
-        Serial.print(" | Voltage: ");
-        Serial.print(voltage);
-        Serial.println(" V");
-        
-        // Reset variables for the next batch
+
+        // Display ADC value
+        lcd.setCursor(0, 0);
+        lcd.print("ADC: ");
+        lcd.print(avg_adc);
+        lcd.print("     ");
+
+        // Display voltage
+        lcd.setCursor(0, 1);
+        lcd.print("V: ");
+        lcd.print(voltage, 2);
+        lcd.print(" V    ");
+
+        // Reset for next 16-sample batch
         adc_sum = 0;
         sample_count = 0;
         adc_ready = false;
-        
-        delay(500); // Pause before next reading
+
+        // Start next batch
+        ADCSRA |= (1 << ADSC);
     }
+    // X Slow down update
+    delay(100);
 }

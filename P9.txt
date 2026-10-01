@@ -1,6 +1,11 @@
 #include <Arduino.h>
 #include <Servo.h>
 
+/// Wiring
+// D9 -> Servo signal
+// Servo VCC -> 5V
+// Servo GND -> GND
+
 Servo servo;
 
 const int SERVO_PIN = 9;
@@ -20,6 +25,7 @@ void setup()
     Serial.println("Enter angle (0-180):");
 }
 
+/// Process serial command
 void processCommand(String command)
 {
     command.trim();

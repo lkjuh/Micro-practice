@@ -1,200 +1,108 @@
 #include <Arduino.h>
 
-// =========================
-// Pin configuration
-// =========================
+/// Wiring
+// PD2 -> EN  (Motor)
+// PD3 -> DIR (Direction)
+// PD4 -> PUL (Step pulse)
 
-const int LIGHT_PIN = A0;
-const int LED_PIN = 13;
+// ! Do not set M012 = 0 0 0
 
-// a, b, c, d, e, f, g, h
-const int SEGMENT_PINS[8] = {
-    3, 4, 5, 6, 7, 8, 9, 10
+#define EN_PIN   2
+#define DIR_PIN  3
+#define PUL_PIN  4
+
+/// Motor configuration
+// 400 pulses = 360 degrees
+// M012 = 1 0 0 -> Half Step
+const float STEPS_PER_DEGREE = 400.0 / 360.0;
+
+// X List of angles to test
+const uint16_t target_angles[] = {
+    0, 45, 90, 135, 180, 225, 270, 315, 360
 };
 
-// C1, C2, C3, C4
-const int DIGIT_PINS[4] = {
-    11, 12, A1, A2
-};
+// X Calculate number of angles
+const uint8_t TOTAL_ANGLES =
+    sizeof(target_angles) / sizeof(target_angles[0]);
 
-// =========================
-// 7-segment patterns
-// Active LOW
-// LOW  = ON
-// HIGH = OFF
-// =========================
+// Current motor position
+uint16_t current_angle = 0;
 
-const byte DIGIT_PATTERN[10] = {
-    0b00111111, // 0
-    0b00000110, // 1
-    0b01011011, // 2
-    0b01001111, // 3
-    0b01100110, // 4
-    0b01101101, // 5
-    0b01111101, // 6
-    0b00000111, // 7
-    0b01111111, // 8
-    0b01101111  // 9
-};
 
-const int DARK_THRESHOLD = 400;
-
-// =========================
-// Turn all digits OFF
-// =========================
-
-void turnOffDigits()
+// Generate step pulses
+void stepMotor(uint16_t steps, bool direction)
 {
-    for (int i = 0; i < 4; i++)
+    // Set rotation direction
+    digitalWrite(DIR_PIN, direction ? HIGH : LOW);
+
+    // Generate the required number of pulses
+    for (uint16_t i = 0; i < steps; i++)
     {
-        digitalWrite(DIGIT_PINS[i], HIGH);
+        digitalWrite(PUL_PIN, HIGH);
+        delayMicroseconds(1000);
+
+        digitalWrite(PUL_PIN, LOW);
+        delayMicroseconds(1000);
     }
 }
 
-// =========================
-// Set segments
-// =========================
 
-void setSegments(byte pattern)
+// Move motor to target angle
+void moveToAngle(uint16_t target_angle)
 {
-    for (int i = 0; i < 8; i++)
-    {
-        if (bitRead(pattern, i))
-        {
-            digitalWrite(SEGMENT_PINS[i], LOW);
-        }
-        else
-        {
-            digitalWrite(SEGMENT_PINS[i], HIGH);
-        }
-    }
+    // Difference between target and current position
+    int16_t angle_diff = target_angle - current_angle;
+
+    // No movement needed
+    if (angle_diff == 0)
+        return;
+
+    // Positive -> one direction
+    // Negative -> opposite direction
+    bool direction = (angle_diff > 0);
+
+    // Get absolute angle difference
+    uint16_t abs_angle_diff = abs(angle_diff);
+
+    // Convert angle to number of steps
+    uint16_t steps =
+        round(abs_angle_diff * STEPS_PER_DEGREE);
+
+    // Move motor
+    stepMotor(steps, direction);
+
+    // Remember new position
+    current_angle = target_angle;
 }
 
-// =========================
-// Multiplex 4-digit display
-// =========================
 
-void displayNumber(int number)
-{
-    int digits[4];
-
-    digits[0] = (number / 1000) % 10;
-    digits[1] = (number / 100) % 10;
-    digits[2] = (number / 10) % 10;
-    digits[3] = number % 10;
-
-    for (int i = 0; i < 4; i++)
-    {
-        // Turn all digits OFF
-        turnOffDigits();
-
-        // Set segments
-        setSegments(DIGIT_PATTERN[digits[i]]);
-
-        // Turn current digit ON
-        digitalWrite(DIGIT_PINS[i], LOW);
-
-        // Short delay for multiplexing
-        delay(2);
-
-        // Turn current digit OFF
-        digitalWrite(DIGIT_PINS[i], HIGH);
-    }
-}
-
-// =========================
-// Setup
-// =========================
-
+/// Setup
 void setup()
 {
-    pinMode(LIGHT_PIN, INPUT);
-    pinMode(LED_PIN, OUTPUT);
+    pinMode(EN_PIN, OUTPUT);
+    pinMode(DIR_PIN, OUTPUT);
+    pinMode(PUL_PIN, OUTPUT);
 
-    // Segment pins
-    for (int i = 0; i < 8; i++)
-    {
-        pinMode(SEGMENT_PINS[i], OUTPUT);
-        digitalWrite(SEGMENT_PINS[i], HIGH);
-    }
-
-    // Digit pins
-    for (int i = 0; i < 4; i++)
-    {
-        pinMode(DIGIT_PINS[i], OUTPUT);
-        digitalWrite(DIGIT_PINS[i], HIGH);
-    }
-
-    Serial.begin(9600);
-
-    Serial.println("Light sensor ready.");
+    // DRV8825 Enable is active LOW
+    digitalWrite(EN_PIN, LOW);
 }
 
-// =========================
-// Main loop
-// =========================
-
+/// Main program
 void loop()
 {
-    // --------------------------------
-    // ADC reads continuously
-    // --------------------------------
-
-    int adcValue = analogRead(LIGHT_PIN);
-
-    // --------------------------------
-    // Update displayed value every 100 ms
-    // --------------------------------
-
-    static int displayValue = 0;
-    static unsigned long lastDisplayUpdate = 0;
-
-    if (millis() - lastDisplayUpdate >= 100)
+    // X Demo:
+    // Move through several predefined angles
+    for (uint8_t i = 0; i < TOTAL_ANGLES; i++)
     {
-        lastDisplayUpdate = millis();
+        moveToAngle(target_angles[i]);
 
-        displayValue = adcValue;
+        // X Demo: wait at each position
+        delay(1000);
     }
 
-    // --------------------------------
-    // LED indicates dark / bright
-    // --------------------------------
-
-    if (adcValue < DARK_THRESHOLD)
-    {
-        digitalWrite(LED_PIN, HIGH);
-    }
-    else
-    {
-        digitalWrite(LED_PIN, LOW);
-    }
-
-    // --------------------------------
-    // UART
-    // --------------------------------
-
-    static unsigned long lastSerialUpdate = 0;
-
-    if (millis() - lastSerialUpdate >= 100)
-    {
-        lastSerialUpdate = millis();
-
-        Serial.print("ADC: ");
-        Serial.print(adcValue);
-
-        if (adcValue < DARK_THRESHOLD)
-        {
-            Serial.println(" - Dark");
-        }
-        else
-        {
-            Serial.println(" - Bright");
-        }
-    }
-
-    // --------------------------------
-    // Keep 7-segment multiplexing fast
-    // --------------------------------
-
-    displayNumber(displayValue);
+    // X Demo:
+    // The next cycle starts from 0 degrees.
+    // The motor physically returns to 0 through the
+    // first command in target_angles[].
+    current_angle = 0;
 }

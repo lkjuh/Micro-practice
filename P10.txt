@@ -1,5 +1,9 @@
 #include <Arduino.h>
 
+/// Wiring
+// D2 -> PIR sensor output
+// D13 -> LED
+
 const int PIR_PIN = 2;
 const int LED_PIN = 13;
 
